@@ -91,7 +91,7 @@ window.addEventListener('load', function(){
         let write_json=JSON.stringify(mode_arr);
         sessionStorage.setItem('blogDB_mode', write_json); //  // セッションストレージ保存
         setTimeout(()=>{
-            location.reload(false); }, 200 ); }// ツールから再リロードする
+            location.reload(false); }, 2000 ); }// ツールから再リロードする
     else{
         main(mode_arr, auto_check, amember); }
 
