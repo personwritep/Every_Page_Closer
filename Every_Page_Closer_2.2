@@ -1,0 +1,238 @@
+// ==UserScript==
+// @name         Every Page Closer 💢
+// @namespace  http://tampermonkey.net/
+// @version       2.2
+// @description  「記事の編集・削除」ページで「公開記事」「アメンバー公開記事」を「下書き」に変更する
+// @author        Ameba Blog User
+// @match        https://blog.ameba.jp/ucs/entry/srventrylist*
+// @match        https://blog.ameba.jp/ucs/entry/srventryupdate*
+// @run-at        document-start
+// @grant         none
+// ==/UserScript==
+
+
+window.addEventListener('DOMContentLoaded', function(){ // CSSデザインを適用するためのスクリプト
+    let css=[
+        '.include-ex-linkBtn, .save-browserPush, .save-hashtag-module, .adcrossBanner{ display: none }',
+        'html { overflow-y: overlay !important }',
+        '#globalHeader, #ucsHeader, #ucsMainLeft h1, .l-ucs-sidemenu-area, #ucsMainRight,',
+        '#entryList dl, #entryList .rightCol input, .actionControl,',
+        '#footerAd, #globalFooter, .checkboxAllControl { display: none }',
+
+        '#ucsContent{ width: 720px !important; box-shadow: 0 0 0 100vh #c5d8e1 }',
+        '#ucsMain{ background: #fff } #ucsMainLeft { width: 690px !important; float: none }',
+
+        '#entryList li{ height: 24px; padding: 8px 5px 5px !important }',
+        '#entryList li:hover{ background-color: #e2eef0 }',
+        '#entryList .leftCol, #entryList .titleCol h2{ width: 400px !important; line-height: 24px }',
+        '.leftCol a:hover{ text-decoration: none } .leftCol a:visited{ color: #3970b5 }',
+        '#entryList .rightCol{ display: flex; width: 260px !important }',
+
+        '#entryList .txtCol .date{ font-size: 13px; color: #000 }',
+        '#entryList .txtCol{ white-space: nowrap; font-size: 13px; margin-top: 4px; line-height: 16px }',
+        '#entryList .deleteCol { margin: -3px 0 0 20px }',
+        '.deleteCol a:nth-child(2), .deleteCol a:nth-child(3), .rightCol input { display: none }',
+        '#entryList .btnDefault { height: 25px }',
+        '#entryList .btnDefault:hover { box-shadow: inset 0 0 0px 2px #1976d2 }',
+
+        '#entryList ul input[value="1"] + input + li .txtCol span:first-child{ display: inline-block;',
+        'margin-top: -2px; padding: 2px 13px 0; color: #fff; background: #2196f3 !important }',
+        '#entryList ul input[value="2"] + input + li .txtCol span:first-child{ display: inline-block;',
+        'width: 3em; text-indent: -1em; overflow: hidden; margin-top: -2px; padding: 2px 13px 0;',
+        'vertical-align: -4px; color: #fff; background: #009688 !important }',
+
+        '#entryMonth { overflow: visible } #entryMonth li { padding: 2px 12px 4px }',
+        '#nowMonth { border: none; outline: 2px solid red; outline-offset: 2px; color: #000 }',
+        '#entryListEdit form { display: flex; flex-direction: column } #entrySort { order: -2 }',
+        '.pagingArea { order: -1; padding: 4px; margin-bottom: -33px; background: #ddedf3 }',
+        '.pagingArea a { border: 1px solid #888 } .pagingArea .active{ border: 2px solid #0066cc }',
+        '#sorting { margin: 38px 0 4px; padding: 4px 10px; height: 40px; background: #ddedf3 }',
+        '#sorting select, #sorting ul { display: none }'].join(' ');
+
+    let style=document.createElement('style');
+    style.insertAdjacentHTML('afterbegin', css);
+    let head=document.getElementsByTagName('head')[0];
+    head.appendChild(style);
+})
+
+
+
+window.addEventListener('load', function(){ // このスクリプトは孫ウインドウだけで働く
+    let body_id=document.body.getAttribute('id');
+    if(body_id=="entryCreate"){ // この項だけ孫ウインドウで働く
+        window.document.body.style.background='#c5d8e1';
+        window.document.body.style.boxShadow='0 0 0 100vh #c5d8e1';
+        window.document.querySelector('form').style.display='none';
+
+        select_e(close_w);
+
+        function select_e(close_w){
+            let error_report=document.querySelector('h1.p-error__head');
+            if(error_report==null){ // 保存エラー無い場合 grayを送信　編集画面を閉じる
+                if(window.opener){
+                    report('gray');
+                    window.opener.close(); }}
+            else{ // 保存エラーのある場合は redを送信　編集画面を残す
+                if(window.opener){
+                    report('red');
+                    window.opener.location.reload(); }}
+            close_w(); }
+
+        function close_w(){
+            window.open('about:blank','_self').close(); } // 孫ウインドウは常に閉じる
+
+        function report(color){
+            window.opener.document.querySelector('html').style.color=color; }}
+})
+
+
+
+window.addEventListener('load', function(){ // このスクリプトは親ウインドウで働くメインスクリプト
+    let next;
+    let mode // 動作モード
+    let entry_target;
+    let publish_f;
+    let list_bar;
+    let new_win;
+    let link_target;
+
+    let ua=0;
+    let agent=window.navigator.userAgent.toLowerCase();
+    if(agent.indexOf('firefox') > -1){ ua=1; } // Firefoxの場合のフラグ
+    if(agent.indexOf('edge') > -1){ ua=2; } // Edgeの場合のフラグ
+
+    let read_json=localStorage.getItem('blogDB_mode'); // ローカルストレージ 保存名
+    mode=JSON.parse(read_json);
+    if(mode!=3){ mode=0; } //「3」はページングでぺージを開いた場合=連続作業とみなす
+    localStorage.removeItem('blogDB_mode'); // ストレージの mode記録 は起動時に削除
+
+    paging_watch();
+
+    function paging_watch(){
+        let k;
+        let ym_pager=document.querySelectorAll('#entrySort a');
+        for(k=0; k<ym_pager.length; k++){
+            ym_pager[k].addEventListener('mousedown', function(){
+                mode_send(); }); }
+        let pn_pager=document.querySelectorAll('.pagingArea a');
+        for(k=0; k<pn_pager.length; k++){
+            pn_pager[k].addEventListener('mousedown', function(){
+                mode_send(); }); }
+
+        function mode_send(){ // 「0」以外から移動時の場合は「3」をローカルストレージ保存
+            if(mode>0){
+                let write_json=JSON.stringify(3);
+                localStorage.setItem('blogDB_mode', write_json); }}} // ローカルストレージ 保存
+
+
+    entry_target=document.querySelectorAll('.deleteCol');
+    publish_f=document.querySelectorAll('input[name="publish_flg"]');
+    list_bar=document.querySelectorAll('#entryList li');
+
+    let body_id=document.body.getAttribute('id');
+    if(body_id=='entryListEdit'){ // 親ウインドウの条件
+
+        let button1=document.createElement('input');
+        button1.setAttribute('id', 'start_button');
+        button1.setAttribute('type', 'submit');
+        button1.setAttribute('style', 'padding: 2px 8px 0; margin: 7px 15px; width: 200px');
+        if(ua==2){
+            button1.setAttribute('style', 'padding: 2px 8px; margin: 7px 15px; width: 200px'); }
+        let box=document.querySelector('#sorting');
+        box.appendChild(button1);
+
+        button1.setAttribute('value', 'クローズ処理を開始　 ▶');
+        button1.onclick=function(e){
+            e.preventDefault();
+            if(mode==0){ // 最初の起動直後
+                start_select(); }
+            else if(mode==1){ // 続行状態
+                mode=2; // クリックされたら停止モード
+                button1.setAttribute('value', 'クローズ処理を続行　 ▶'); }
+            else if(mode==2){ // 停止状態
+                mode=1; // クリックされたら続行モード
+                button1.setAttribute('value', 'クローズ処理を停止　 ❚❚');
+                open_win(next); }
+            else if(mode==3){ // 前ページから連続作業で開いた状態
+                if(entry_target.length==0 || entry_target==null){ // 編集対象がリストに無い場合
+                    alert('このページに編集対象の記事がありません'); } // クリックで modeは「3」のまま
+                else if(entry_target.length >0){ // 編集対象がリストに有る場合
+                    mode=1; // クリックされたら続行モード
+                    button1.setAttribute('value', 'クローズ処理を停止　 ❚❚');
+                    open_win(0); }}} // 連続作業でスタート
+
+        function start_select(){
+            if(entry_target.length==0 || entry_target==null){ // 編集対象がリストに無い場合
+                alert('このページに編集対象の記事がありません'); }
+            if(entry_target.length >0){ // 編集対象がリストに有る場合
+                let conf_str=['⛔　 このページの全ての記事を 「下書き」 に変更します。\n',
+                              '\n　　 Every Page Closer 💢 の実行前に Every Page Snap 💢',
+                              '\n　　 を実行して、全ての記事の 「公開設定」 を記録してください。',
+                              '\n　　 「公開設定」 のSNAP記録が無いと 「アメンバー限定公開」 と',
+                              '\n　　 「全員に公開」 の区別がなくなり 公開処理が困難になります。\n',
+                              '\n　　　　　　OK を押すと 「クローズ処理」 を開始します。'].join('');
+                let ok=confirm(conf_str);
+                if(ok){
+                    mode=1;
+                    button1.setAttribute('value', 'クローズ処理を停止　 ❚❚');
+                    open_win(0); }}}}
+
+
+    function open_win(k){
+        new_win=Array(entry_target.length);
+        link_target=Array(entry_target.length);
+
+        link_target[k]=entry_target[k].getElementsByTagName('a')[0].getAttribute('href');
+        let top_p=100 + 30*k;
+
+        if(mode==1){
+            if(publish_f[k].value=='0' || publish_f[k].value=='2'){ //「公開」「アメンバー公開」を処理する
+                new_win[k]=window.open(link_target[k], k, 'top=' + top_p + ', left=200, width=750, height=180');
+
+                list_bar[k].style.boxShadow='inset 0 0 0 2px #03a9f4'; // リスト欄に青枠表示
+                new_win[k].addEventListener('load', function(){
+                    setTimeout( function(){
+                        edit_target(publish_f[k].value, k); }, 50); });} // 子ウインドウで書込み開始 🟦
+            else{
+                list_bar[k].style.backgroundColor='#eceff1';
+                next_do(k); }}} //⏩ 子ウインドウを開かず リスト背景 淡グレー
+
+
+    function edit_target(val,k){
+        new_win[k].addEventListener('beforeunload', flag_line , false);
+        publish_do(val,k);
+
+        function flag_line(){
+            let send_color=new_win[k].document.querySelector('html').style.color;
+            if(send_color=='gray'){ // 文書保存が正常終了した場合　リスト背景 淡ブルー
+                list_bar[k].style.boxShadow='none';
+                list_bar[k].style.backgroundColor='#a4d5fd';
+                let publish_f_tetCol=list_bar[k].querySelector('.txtCol span:first-child');
+                let sty=['display: inline-block; margin-top: -2px; padding: 2px 13px 0;',
+                         'color: #fff; background: #2196f3 !important; text-indent: 0'].join(' ');
+                publish_f_tetCol.textContent='下書き';
+                publish_f_tetCol.style=sty;
+                next_do(k); } //⏩
+            else if(send_color=='red'){ // 文書保存が異常終了の場合は編集画面は閉ず　リスト背景白 赤枠表示
+                list_bar[k].style.boxShadow='inset 0 0 0 2px red';
+                list_bar[k].style.backgroundColor='#fff';
+                next_do(k); }} //⏩
+
+        function publish_do(val,k){
+            let publish_b0=new_win[k].document.querySelector('button.js-submitButton[publishflg="0"]');
+            let publish_b1=new_win[k].document.querySelector('button.js-submitButton[publishflg="1"]');
+            let publish_b2=new_win[k].document.querySelector('button.js-submitButton[publishflg="2"]');
+            if(val==0){ publish_b1.click(); } //「公開記事」→「下書き」の書換え実行
+            if(val==1){ publish_b1.click(); }
+            if(val==2){ publish_b1.click(); }}} //「アメンバー公開記事」→「下書き」の書換え実行
+
+
+    function next_do(k){
+        next=k+1;
+        if(next<entry_target.length){ open_win(next); }
+        else{
+            mode=4; // 終了状態
+            let button1=document.querySelector('#start_button');
+            button1.setAttribute('value', '処理が終りました'); }}
+
+})
